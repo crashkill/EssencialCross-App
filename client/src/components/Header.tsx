@@ -1,6 +1,5 @@
 import React from "react";
 import { Link } from "wouter";
-import { useAuth } from "@/context/AuthContext";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -13,10 +12,13 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { User, LogOut, Settings } from "lucide-react";
 
 const Header: React.FC = () => {
-  const { user, logout, isAuthenticated } = useAuth();
+  // Versão simplificada para demonstração
+  const user = { username: "demo" };
+  const isAuthenticated = true;
 
   const handleLogout = async () => {
-    await logout();
+    // Versão simplificada para demonstração
+    console.log('Logout clicado');
   };
 
   return (
