@@ -23,17 +23,14 @@ export interface GeneratedWod {
 
 export async function generateWod(params: WodGenerationParams): Promise<GeneratedWod> {
   try {
+    // Corrigindo a ordem dos parâmetros para corresponder à assinatura da função
     const response = await apiRequest(
-      "POST",
       "/api/wod/generate", 
+      "POST",
       params
     );
     
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.message || 'Não foi possível gerar o WOD');
-    }
-    
+    // A função apiRequest já verifica se a resposta está ok
     const wodData: GeneratedWod = await response.json();
     return wodData;
   } catch (error) {

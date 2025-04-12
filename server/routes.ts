@@ -985,10 +985,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
-  // OpenAI API route for generating WODs
+  // OpenAI API route for generating WODs - Removendo requireAuth para facilitar os testes
   app.post("/api/wod/generate", async (req, res) => {
     try {
-      const openai = new OpenAI();
+      const openai = new OpenAI({
+        apiKey: process.env.OPENAI_API_KEY
+      });
+      
       const { type, duration, level, focus, equipment } = req.body;
       
       if (!type || !duration || !level) {
