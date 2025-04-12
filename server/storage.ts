@@ -3,6 +3,10 @@ import {
   workouts, 
   exercises, 
   personalRecords,
+  groups,
+  groupMembers,
+  scheduledWorkouts,
+  workoutResults,
   type User, 
   type InsertUser,
   type Workout,
@@ -10,7 +14,15 @@ import {
   type Exercise,
   type InsertExercise,
   type PersonalRecord,
-  type InsertPersonalRecord
+  type InsertPersonalRecord,
+  type Group,
+  type InsertGroup,
+  type GroupMember,
+  type InsertGroupMember,
+  type ScheduledWorkout,
+  type InsertScheduledWorkout,
+  type WorkoutResult,
+  type InsertWorkoutResult
 } from "@shared/schema";
 
 export interface IStorage {
@@ -44,6 +56,34 @@ export interface IStorage {
   createPersonalRecord(pr: InsertPersonalRecord): Promise<PersonalRecord>;
   updatePersonalRecord(id: number, pr: Partial<PersonalRecord>): Promise<PersonalRecord | undefined>;
   deletePersonalRecord(id: number): Promise<boolean>;
+  
+  // Group methods
+  getGroup(id: number): Promise<Group | undefined>;
+  getGroupsByCoachId(coachId: number): Promise<Group[]>;
+  getGroupsForUser(userId: number): Promise<Group[]>;
+  createGroup(group: InsertGroup): Promise<Group>;
+  updateGroup(id: number, group: Partial<Group>): Promise<Group | undefined>;
+  deleteGroup(id: number): Promise<boolean>;
+  
+  // Group Member methods
+  addGroupMember(member: InsertGroupMember): Promise<GroupMember>;
+  removeGroupMember(groupId: number, userId: number): Promise<boolean>;
+  getGroupMembers(groupId: number): Promise<GroupMember[]>;
+  
+  // Scheduled Workout methods
+  getScheduledWorkout(id: number): Promise<ScheduledWorkout | undefined>;
+  getScheduledWorkoutsByGroupId(groupId: number): Promise<ScheduledWorkout[]>;
+  getUpcomingWorkoutsForUser(userId: number): Promise<ScheduledWorkout[]>;
+  createScheduledWorkout(workout: InsertScheduledWorkout): Promise<ScheduledWorkout>;
+  updateScheduledWorkout(id: number, workout: Partial<ScheduledWorkout>): Promise<ScheduledWorkout | undefined>;
+  deleteScheduledWorkout(id: number): Promise<boolean>;
+  
+  // Workout Result methods
+  getWorkoutResult(id: number): Promise<WorkoutResult | undefined>;
+  getWorkoutResultsByUserId(userId: number): Promise<WorkoutResult[]>;
+  getWorkoutResultsByScheduledWorkout(scheduledWorkoutId: number): Promise<WorkoutResult[]>;
+  createWorkoutResult(result: InsertWorkoutResult): Promise<WorkoutResult>;
+  updateWorkoutResult(id: number, result: Partial<WorkoutResult>): Promise<WorkoutResult | undefined>;
 }
 
 export class MemStorage implements IStorage {
@@ -51,20 +91,38 @@ export class MemStorage implements IStorage {
   private workouts: Map<number, Workout>;
   private exercises: Map<number, Exercise>;
   private personalRecords: Map<number, PersonalRecord>;
+  private groups: Map<number, Group>;
+  private groupMembers: Map<number, GroupMember>;
+  private scheduledWorkouts: Map<number, ScheduledWorkout>;
+  private workoutResults: Map<number, WorkoutResult>;
+  
   private userIdCounter: number;
   private workoutIdCounter: number;
   private exerciseIdCounter: number;
   private prIdCounter: number;
+  private groupIdCounter: number;
+  private groupMemberIdCounter: number;
+  private scheduledWorkoutIdCounter: number;
+  private workoutResultIdCounter: number;
 
   constructor() {
     this.users = new Map();
     this.workouts = new Map();
     this.exercises = new Map();
     this.personalRecords = new Map();
+    this.groups = new Map();
+    this.groupMembers = new Map();
+    this.scheduledWorkouts = new Map();
+    this.workoutResults = new Map();
+    
     this.userIdCounter = 1;
     this.workoutIdCounter = 1;
     this.exerciseIdCounter = 1;
     this.prIdCounter = 1;
+    this.groupIdCounter = 1;
+    this.groupMemberIdCounter = 1;
+    this.scheduledWorkoutIdCounter = 1;
+    this.workoutResultIdCounter = 1;
     
     // Initialize with some exercises for demo purposes
     this.initializeExercises();
@@ -297,6 +355,176 @@ export class MemStorage implements IStorage {
 
   async deletePersonalRecord(id: number): Promise<boolean> {
     return this.personalRecords.delete(id);
+  }
+  
+  // Group methods
+  async getGroup(id: number): Promise<Group | undefined> {
+    return this.groups.get(id);
+  }
+
+  async getGroupsByCoachId(coachId: number): Promise<Group[]> {
+    return Array.from(this.groups.values())
+      .filter(group => group.coachId === coachId)
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  async getGroupsForUser(userId: number): Promise<Group[]> {
+    // Encontrar grupos onde o usuário é membro
+    const membershipGroups = Array.from(this.groupMembers.values())
+      .filter(member => member.userId === userId)
+      .map(member => member.groupId);
+      
+    return Array.from(this.groups.values())
+      .filter(group => membershipGroups.includes(group.id));
+  }
+
+  async createGroup(insertGroup: InsertGroup): Promise<Group> {
+    const id = this.groupIdCounter++;
+    const createdAt = new Date();
+    const group: Group = { ...insertGroup, id, createdAt };
+    this.groups.set(id, group);
+    return group;
+  }
+
+  async updateGroup(id: number, groupUpdate: Partial<Group>): Promise<Group | undefined> {
+    const existingGroup = this.groups.get(id);
+    if (!existingGroup) {
+      return undefined;
+    }
+    
+    const updatedGroup = { ...existingGroup, ...groupUpdate };
+    this.groups.set(id, updatedGroup);
+    return updatedGroup;
+  }
+
+  async deleteGroup(id: number): Promise<boolean> {
+    // Remover membros do grupo
+    Array.from(this.groupMembers.values())
+      .filter(member => member.groupId === id)
+      .forEach(member => this.groupMembers.delete(member.id));
+      
+    // Remover workouts programados para o grupo
+    Array.from(this.scheduledWorkouts.values())
+      .filter(workout => workout.groupId === id)
+      .forEach(workout => this.scheduledWorkouts.delete(workout.id));
+      
+    return this.groups.delete(id);
+  }
+  
+  // Group Member methods
+  async addGroupMember(insertMember: InsertGroupMember): Promise<GroupMember> {
+    const id = this.groupMemberIdCounter++;
+    const joinedAt = new Date();
+    const member: GroupMember = { ...insertMember, id, joinedAt };
+    this.groupMembers.set(id, member);
+    return member;
+  }
+
+  async removeGroupMember(groupId: number, userId: number): Promise<boolean> {
+    const member = Array.from(this.groupMembers.values())
+      .find(m => m.groupId === groupId && m.userId === userId);
+      
+    if (!member) {
+      return false;
+    }
+    
+    return this.groupMembers.delete(member.id);
+  }
+
+  async getGroupMembers(groupId: number): Promise<GroupMember[]> {
+    return Array.from(this.groupMembers.values())
+      .filter(member => member.groupId === groupId)
+      .sort((a, b) => new Date(b.joinedAt).getTime() - new Date(a.joinedAt).getTime());
+  }
+  
+  // Scheduled Workout methods
+  async getScheduledWorkout(id: number): Promise<ScheduledWorkout | undefined> {
+    return this.scheduledWorkouts.get(id);
+  }
+
+  async getScheduledWorkoutsByGroupId(groupId: number): Promise<ScheduledWorkout[]> {
+    return Array.from(this.scheduledWorkouts.values())
+      .filter(workout => workout.groupId === groupId)
+      .sort((a, b) => new Date(a.scheduledDate).getTime() - new Date(b.scheduledDate).getTime());
+  }
+
+  async getUpcomingWorkoutsForUser(userId: number): Promise<ScheduledWorkout[]> {
+    // Encontrar grupos onde o usuário é membro
+    const userGroups = await this.getGroupsForUser(userId);
+    const userGroupIds = userGroups.map(group => group.id);
+    
+    const now = new Date();
+    
+    return Array.from(this.scheduledWorkouts.values())
+      .filter(workout => 
+        userGroupIds.includes(workout.groupId) && 
+        new Date(workout.scheduledDate).getTime() >= now.getTime()
+      )
+      .sort((a, b) => new Date(a.scheduledDate).getTime() - new Date(b.scheduledDate).getTime());
+  }
+
+  async createScheduledWorkout(insertWorkout: InsertScheduledWorkout): Promise<ScheduledWorkout> {
+    const id = this.scheduledWorkoutIdCounter++;
+    const createdAt = new Date();
+    const workout: ScheduledWorkout = { ...insertWorkout, id, createdAt };
+    this.scheduledWorkouts.set(id, workout);
+    return workout;
+  }
+
+  async updateScheduledWorkout(id: number, workoutUpdate: Partial<ScheduledWorkout>): Promise<ScheduledWorkout | undefined> {
+    const existingWorkout = this.scheduledWorkouts.get(id);
+    if (!existingWorkout) {
+      return undefined;
+    }
+    
+    const updatedWorkout = { ...existingWorkout, ...workoutUpdate };
+    this.scheduledWorkouts.set(id, updatedWorkout);
+    return updatedWorkout;
+  }
+
+  async deleteScheduledWorkout(id: number): Promise<boolean> {
+    // Remover resultados relacionados a este workout
+    Array.from(this.workoutResults.values())
+      .filter(result => result.scheduledWorkoutId === id)
+      .forEach(result => this.workoutResults.delete(result.id));
+      
+    return this.scheduledWorkouts.delete(id);
+  }
+  
+  // Workout Result methods
+  async getWorkoutResult(id: number): Promise<WorkoutResult | undefined> {
+    return this.workoutResults.get(id);
+  }
+
+  async getWorkoutResultsByUserId(userId: number): Promise<WorkoutResult[]> {
+    return Array.from(this.workoutResults.values())
+      .filter(result => result.userId === userId)
+      .sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime());
+  }
+
+  async getWorkoutResultsByScheduledWorkout(scheduledWorkoutId: number): Promise<WorkoutResult[]> {
+    return Array.from(this.workoutResults.values())
+      .filter(result => result.scheduledWorkoutId === scheduledWorkoutId)
+      .sort((a, b) => new Date(b.completedAt).getTime() - new Date(a.completedAt).getTime());
+  }
+
+  async createWorkoutResult(insertResult: InsertWorkoutResult): Promise<WorkoutResult> {
+    const id = this.workoutResultIdCounter++;
+    const completedAt = new Date();
+    const result: WorkoutResult = { ...insertResult, id, completedAt };
+    this.workoutResults.set(id, result);
+    return result;
+  }
+
+  async updateWorkoutResult(id: number, resultUpdate: Partial<WorkoutResult>): Promise<WorkoutResult | undefined> {
+    const existingResult = this.workoutResults.get(id);
+    if (!existingResult) {
+      return undefined;
+    }
+    
+    const updatedResult = { ...existingResult, ...resultUpdate };
+    this.workoutResults.set(id, updatedResult);
+    return updatedResult;
   }
 }
 

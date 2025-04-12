@@ -2,6 +2,9 @@ import { pgTable, text, serial, integer, boolean, timestamp, json, uniqueIndex, 
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
+// User roles
+export const userRoles = ["athlete", "coach", "admin"] as const;
+
 // Users
 export const users = pgTable("users", {
   id: serial("id").primaryKey(),
@@ -9,6 +12,7 @@ export const users = pgTable("users", {
   password: text("password").notNull(),
   name: text("name"),
   email: text("email"),
+  role: text("role").$type<typeof userRoles[number]>().default("athlete").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -17,6 +21,7 @@ export const insertUserSchema = createInsertSchema(users).pick({
   password: true,
   name: true,
   email: true,
+  role: true,
 });
 
 // Workout types
@@ -94,6 +99,73 @@ export const insertPRSchema = createInsertSchema(personalRecords).pick({
   notes: true,
 });
 
+// Grupos de treino
+export const groups = pgTable("groups", {
+  id: serial("id").primaryKey(),
+  name: text("name").notNull(),
+  description: text("description"),
+  coachId: integer("coach_id").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertGroupSchema = createInsertSchema(groups).pick({
+  name: true,
+  description: true,
+  coachId: true,
+});
+
+// Membros do grupo
+export const groupMembers = pgTable("group_members", {
+  id: serial("id").primaryKey(),
+  groupId: integer("group_id").notNull().references(() => groups.id),
+  userId: integer("user_id").notNull().references(() => users.id),
+  joinedAt: timestamp("joined_at").defaultNow().notNull(),
+}, (table) => {
+  return {
+    // Um usuário só pode pertencer a um grupo uma vez
+    uniqMembership: uniqueIndex("uniq_membership").on(table.groupId, table.userId),
+  };
+});
+
+export const insertGroupMemberSchema = createInsertSchema(groupMembers).pick({
+  groupId: true,
+  userId: true,
+});
+
+// Workouts programados
+export const scheduledWorkouts = pgTable("scheduled_workouts", {
+  id: serial("id").primaryKey(),
+  groupId: integer("group_id").notNull().references(() => groups.id),
+  workoutId: integer("workout_id").notNull().references(() => workouts.id),
+  scheduledDate: timestamp("scheduled_date").notNull(),
+  createdBy: integer("created_by").notNull().references(() => users.id),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export const insertScheduledWorkoutSchema = createInsertSchema(scheduledWorkouts).pick({
+  groupId: true,
+  workoutId: true,
+  scheduledDate: true,
+  createdBy: true,
+});
+
+// Resultados de workouts
+export const workoutResults = pgTable("workout_results", {
+  id: serial("id").primaryKey(),
+  scheduledWorkoutId: integer("scheduled_workout_id").notNull().references(() => scheduledWorkouts.id),
+  userId: integer("user_id").notNull().references(() => users.id),
+  result: text("result").notNull(),
+  notes: text("notes"),
+  completedAt: timestamp("completed_at").defaultNow().notNull(),
+});
+
+export const insertWorkoutResultSchema = createInsertSchema(workoutResults).pick({
+  scheduledWorkoutId: true,
+  userId: true,
+  result: true,
+  notes: true,
+});
+
 // Type definitions
 export type User = typeof users.$inferSelect;
 export type InsertUser = z.infer<typeof insertUserSchema>;
@@ -106,3 +178,15 @@ export type InsertExercise = z.infer<typeof insertExerciseSchema>;
 
 export type PersonalRecord = typeof personalRecords.$inferSelect;
 export type InsertPersonalRecord = z.infer<typeof insertPRSchema>;
+
+export type Group = typeof groups.$inferSelect;
+export type InsertGroup = z.infer<typeof insertGroupSchema>;
+
+export type GroupMember = typeof groupMembers.$inferSelect;
+export type InsertGroupMember = z.infer<typeof insertGroupMemberSchema>;
+
+export type ScheduledWorkout = typeof scheduledWorkouts.$inferSelect;
+export type InsertScheduledWorkout = z.infer<typeof insertScheduledWorkoutSchema>;
+
+export type WorkoutResult = typeof workoutResults.$inferSelect;
+export type InsertWorkoutResult = z.infer<typeof insertWorkoutResultSchema>;
