@@ -841,6 +841,20 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
+  // Users route (for adding to groups)
+  app.get("/api/users", requireCoach, async (req, res) => {
+    try {
+      // Get all users except the requesting coach
+      const users = Array.from(storage.users.values())
+        .filter(user => user.id !== req.session.userId)
+        .map(({ password, ...userWithoutPassword }) => userWithoutPassword);
+      
+      return res.status(200).json(users);
+    } catch (error) {
+      return res.status(500).json({ message: "Server error" });
+    }
+  });
+
   // Workout Result routes
   app.post("/api/workout-results", requireAuth, async (req, res) => {
     try {

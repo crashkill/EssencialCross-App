@@ -16,26 +16,20 @@ import NotFound from "./pages/not-found";
 import Profile from "./pages/Profile";
 import Settings from "./pages/Settings";
 import WodGeneratorDemo from "./pages/WodGeneratorDemo";
-
-// import { useAuth } from "./context/AuthContext";
+import Groups from "./pages/Groups";
+import ScheduleWorkout from "./pages/ScheduleWorkout";
+import GroupWorkouts from "./pages/GroupWorkouts";
 
 const App: React.FC = () => {
-  // Mock auth state for testing
-  const isAuthenticated = true;
-  const isLoading = false;
+  // Em desenvolvimento, podemos considerar o usuário sempre autenticado
+  const isAuthenticated = process.env.NODE_ENV === 'development' ? true : false;
   const [location] = useLocation();
 
-  // Show loader while checking authentication status
-  if (isLoading) {
-    return (
-      <div className="app-container min-h-screen flex flex-col">
-        <div className="flex items-center justify-center h-screen">
-          <div className="animate-spin h-8 w-8 border-4 border-accent border-t-transparent rounded-full"></div>
-        </div>
-        <Toaster />
-      </div>
-    );
-  }
+  // Verificar se estamos em páginas relacionadas a grupos
+  const isGroupsPage = location === "/groups" || 
+                      location === "/groups/coach" || 
+                      location.startsWith("/group-workouts/") || 
+                      location.startsWith("/schedule-workout/");
 
   return (
     <div className="app-container min-h-screen flex flex-col">
@@ -58,12 +52,51 @@ const App: React.FC = () => {
         <Route path="/profile">
           <AuthGuard>
             <Profile />
+            <TabNavigation />
           </AuthGuard>
         </Route>
         
         <Route path="/settings">
           <AuthGuard>
             <Settings />
+            <TabNavigation />
+          </AuthGuard>
+        </Route>
+        
+        {/* Rotas para grupos de treinamento */}
+        <Route path="/groups">
+          <AuthGuard>
+            <TabProvider>
+              <Groups />
+              <TabNavigation />
+            </TabProvider>
+          </AuthGuard>
+        </Route>
+        
+        <Route path="/groups/coach">
+          <AuthGuard>
+            <TabProvider>
+              <Groups />
+              <TabNavigation />
+            </TabProvider>
+          </AuthGuard>
+        </Route>
+        
+        <Route path="/schedule-workout/:groupId">
+          <AuthGuard>
+            <TabProvider>
+              <ScheduleWorkout />
+              <TabNavigation />
+            </TabProvider>
+          </AuthGuard>
+        </Route>
+        
+        <Route path="/group-workouts/:groupId">
+          <AuthGuard>
+            <TabProvider>
+              <GroupWorkouts />
+              <TabNavigation />
+            </TabProvider>
           </AuthGuard>
         </Route>
         

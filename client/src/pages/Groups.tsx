@@ -1,553 +1,680 @@
-import { useState, useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Link, useLocation, useRoute } from 'wouter';
-import { useAuth } from '../context/AuthContext';
-import { apiRequest } from '../lib/queryClient';
-import { Plus, Users, UserPlus, Trash2, Edit, Calendar } from 'lucide-react';
-
-// UI Components
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
+import React, { useState } from "react";
+import { useLocation } from "wouter";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useForm } from "react-hook-form";
+import { z } from "zod";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useAuth } from "@/context/AuthContext";
+import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { useToast } from '@/hooks/use-toast';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Users, UserPlus, Plus, Dumbbell, CalendarPlus, Calendar, LogOut, Edit, Trash } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { apiRequest } from "@/lib/queryClient";
 
-const formSchema = z.object({
-  name: z.string().min(3, { message: 'O nome do grupo deve ter pelo menos 3 caracteres' }),
-  description: z.string().optional(),
+const groupFormSchema = z.object({
+  name: z.string().min(3, "O nome precisa ter pelo menos 3 caracteres"),
+  description: z.string().optional()
 });
 
-type FormData = z.infer<typeof formSchema>;
+const groupMemberSchema = z.object({
+  userId: z.number(),
+  groupId: z.number()
+});
+
+type GroupFormData = z.infer<typeof groupFormSchema>;
+type GroupMemberData = z.infer<typeof groupMemberSchema>;
+
+interface User {
+  id: number;
+  username: string;
+  name: string | null;
+  role: string;
+  email: string | null;
+}
 
 interface Group {
   id: number;
   name: string;
   description: string | null;
   coachId: number;
-  createdAt: Date;
+  createdAt: string;
+  members?: GroupMember[];
 }
 
 interface GroupMember {
   id: number;
-  groupId: number;
   userId: number;
-  joinedAt: Date;
-  user: {
-    id: number;
-    username: string;
-    name: string | null;
-    email: string | null;
-    role: string;
-  };
+  groupId: number;
+  joinedAt: string;
+  user?: User;
 }
 
-interface AddMemberFormData {
-  userId: string;
-}
-
-const Groups = () => {
+const Groups: React.FC = () => {
   const { user } = useAuth();
+  const [_, navigate] = useLocation();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const [isAddGroupOpen, setIsAddGroupOpen] = useState(false);
-  const [isAddMemberOpen, setIsAddMemberOpen] = useState(false);
-  const [selectedGroup, setSelectedGroup] = useState<Group | null>(null);
-  const [, setLocation] = useLocation();
-  const [isCoachView] = useRoute('/groups/coach');
-  
-  const isCoach = user?.role === 'coach' || user?.role === 'admin';
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [addMemberDialogOpen, setAddMemberDialogOpen] = useState(false);
+  const [selectedGroupId, setSelectedGroupId] = useState<number | null>(null);
+  const [selectedUsers, setSelectedUsers] = useState<number[]>([]);
+  const [activeTab, setActiveTab] = useState<string>(user?.role === "coach" ? "my-groups" : "joined-groups");
 
-  // Formulário para criar um novo grupo
-  const form = useForm<FormData>({
-    resolver: zodResolver(formSchema),
+  // Form para criar um novo grupo
+  const { register, handleSubmit, formState: { errors }, reset } = useForm<GroupFormData>({
+    resolver: zodResolver(groupFormSchema),
     defaultValues: {
-      name: '',
-      description: '',
-    },
+      name: "",
+      description: ""
+    }
   });
 
-  // Formulário para adicionar membro
-  const memberForm = useForm<AddMemberFormData>({
-    defaultValues: {
-      userId: '',
-    },
-  });
-
-  // Buscar grupos - usa endpoint diferente dependendo se é coach ou atleta
-  const { data: groups, isLoading } = useQuery({
-    queryKey: [isCoach && isCoachView ? '/api/groups/coach' : '/api/groups/user'],
-    enabled: !!user,
-  });
-
-  // Buscar usuários para adicionar ao grupo (apenas para coaches)
-  const { data: users } = useQuery({
+  // Queries
+  const { data: allUsers = [] } = useQuery({
     queryKey: ['/api/users'],
-    enabled: isCoach && isAddMemberOpen,
+    queryFn: async () => {
+      if (user?.role !== 'coach' && user?.role !== 'admin') return [];
+      const response = await fetch('/api/users');
+      if (!response.ok) throw new Error('Falha ao carregar usuários');
+      return response.json();
+    },
+    enabled: user?.role === 'coach' || user?.role === 'admin'
   });
 
-  // Buscar membros do grupo selecionado
-  const { data: members, isLoading: isMembersLoading } = useQuery({
-    queryKey: ['/api/groups', selectedGroup?.id, 'members'],
-    enabled: !!selectedGroup,
+  const { data: coachGroups = [], isLoading: isLoadingCoachGroups } = useQuery({
+    queryKey: ['/api/groups/coach'],
+    queryFn: async () => {
+      const response = await fetch('/api/groups/coach');
+      if (!response.ok) throw new Error('Falha ao carregar grupos');
+      return response.json();
+    },
+    enabled: user?.role === 'coach' || user?.role === 'admin'
   });
 
-  // Criar novo grupo
-  const { mutate: createGroup, isPending: isCreating } = useMutation({
-    mutationFn: async (data: FormData) => {
-      return apiRequest('/api/groups', {
+  const { data: memberGroups = [], isLoading: isLoadingMemberGroups } = useQuery({
+    queryKey: ['/api/groups/member'],
+    queryFn: async () => {
+      const response = await fetch('/api/groups/member');
+      if (!response.ok) throw new Error('Falha ao carregar grupos');
+      return response.json();
+    }
+  });
+
+  // Mutations
+  const createGroupMutation = useMutation({
+    mutationFn: async (data: GroupFormData) => {
+      const response = await fetch('/api/groups', {
         method: 'POST',
-        body: JSON.stringify(data),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data)
       });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Falha ao criar grupo');
+      }
+      
+      return response.json();
     },
     onSuccess: () => {
-      toast({
-        title: 'Grupo criado com sucesso',
-        description: 'O grupo foi criado e está pronto para receber membros.',
-      });
       queryClient.invalidateQueries({ queryKey: ['/api/groups/coach'] });
-      form.reset();
-      setIsAddGroupOpen(false);
+      toast({
+        title: "Grupo criado",
+        description: "O grupo foi criado com sucesso!"
+      });
+      setCreateDialogOpen(false);
+      reset();
     },
     onError: (error) => {
       toast({
-        title: 'Erro ao criar grupo',
-        description: 'Ocorreu um erro ao criar o grupo. Tente novamente.',
-        variant: 'destructive',
+        title: "Erro",
+        description: error.message,
+        variant: "destructive"
       });
-    },
+    }
   });
 
-  // Adicionar membro ao grupo
-  const { mutate: addMember, isPending: isAddingMember } = useMutation({
-    mutationFn: async (data: AddMemberFormData) => {
-      if (!selectedGroup) return null;
-      return apiRequest(`/api/groups/${selectedGroup.id}/members`, {
+  const addMemberMutation = useMutation({
+    mutationFn: async (memberIds: number[]) => {
+      const response = await fetch('/api/group-members/batch', {
         method: 'POST',
-        body: JSON.stringify({ userId: data.userId }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ groupId: selectedGroupId, userIds: memberIds })
       });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Falha ao adicionar membros');
+      }
+      
+      return response.json();
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/groups/coach'] });
       toast({
-        title: 'Membro adicionado com sucesso',
-        description: 'O usuário foi adicionado ao grupo de treinamento.',
+        title: "Membros adicionados",
+        description: "Os membros foram adicionados ao grupo com sucesso!"
       });
-      queryClient.invalidateQueries({ queryKey: ['/api/groups', selectedGroup?.id, 'members'] });
-      memberForm.reset();
-      setIsAddMemberOpen(false);
+      setAddMemberDialogOpen(false);
+      setSelectedUsers([]);
     },
     onError: (error) => {
       toast({
-        title: 'Erro ao adicionar membro',
-        description: 'Ocorreu um erro ao adicionar o membro ao grupo. Tente novamente.',
-        variant: 'destructive',
+        title: "Erro",
+        description: error.message,
+        variant: "destructive"
       });
-    },
+    }
   });
 
-  // Remover membro do grupo
-  const { mutate: removeMember } = useMutation({
-    mutationFn: async ({ groupId, userId }: { groupId: number; userId: number }) => {
-      return apiRequest(`/api/groups/${groupId}/members/${userId}`, {
-        method: 'DELETE',
+  const removeMemberMutation = useMutation({
+    mutationFn: async ({ groupId, userId }: { groupId: number, userId: number }) => {
+      const response = await fetch(`/api/group-members/${groupId}/${userId}`, {
+        method: 'DELETE'
       });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Falha ao remover membro');
+      }
+      
+      return true;
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/groups/coach'] });
       toast({
-        title: 'Membro removido com sucesso',
-        description: 'O usuário foi removido do grupo de treinamento.',
+        title: "Membro removido",
+        description: "O membro foi removido do grupo com sucesso!"
       });
-      queryClient.invalidateQueries({ queryKey: ['/api/groups', selectedGroup?.id, 'members'] });
     },
     onError: (error) => {
       toast({
-        title: 'Erro ao remover membro',
-        description: 'Ocorreu um erro ao remover o membro do grupo. Tente novamente.',
-        variant: 'destructive',
+        title: "Erro",
+        description: error.message,
+        variant: "destructive"
       });
-    },
+    }
   });
 
-  // Remover grupo
-  const { mutate: deleteGroup } = useMutation({
+  const leaveGroupMutation = useMutation({
     mutationFn: async (groupId: number) => {
-      return apiRequest(`/api/groups/${groupId}`, {
-        method: 'DELETE',
+      const response = await fetch(`/api/groups/${groupId}/leave`, {
+        method: 'DELETE'
       });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Falha ao sair do grupo');
+      }
+      
+      return true;
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/groups/member'] });
       toast({
-        title: 'Grupo removido com sucesso',
-        description: 'O grupo de treinamento foi removido com sucesso.',
+        title: "Grupo",
+        description: "Você saiu do grupo com sucesso!"
       });
-      setSelectedGroup(null);
-      queryClient.invalidateQueries({ queryKey: ['/api/groups/coach'] });
-      queryClient.invalidateQueries({ queryKey: ['/api/groups/user'] });
     },
     onError: (error) => {
       toast({
-        title: 'Erro ao remover grupo',
-        description: 'Ocorreu um erro ao remover o grupo. Tente novamente.',
-        variant: 'destructive',
+        title: "Erro",
+        description: error.message,
+        variant: "destructive"
       });
-    },
+    }
   });
 
-  const onSubmit = (data: FormData) => {
-    createGroup(data);
+  const deleteGroupMutation = useMutation({
+    mutationFn: async (groupId: number) => {
+      const response = await fetch(`/api/groups/${groupId}`, {
+        method: 'DELETE'
+      });
+      
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.message || 'Falha ao excluir grupo');
+      }
+      
+      return true;
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['/api/groups/coach'] });
+      toast({
+        title: "Grupo excluído",
+        description: "O grupo foi excluído com sucesso!"
+      });
+    },
+    onError: (error) => {
+      toast({
+        title: "Erro",
+        description: error.message,
+        variant: "destructive"
+      });
+    }
+  });
+
+  // Handlers
+  const handleCreateGroup = (data: GroupFormData) => {
+    createGroupMutation.mutate(data);
   };
 
-  const onAddMember = (data: AddMemberFormData) => {
-    if (!selectedGroup) return;
-    addMember(data);
+  const handleAddMembers = () => {
+    if (selectedUsers.length === 0) {
+      toast({
+        title: "Nenhum membro selecionado",
+        description: "Selecione pelo menos um usuário para adicionar ao grupo",
+        variant: "destructive"
+      });
+      return;
+    }
+    
+    addMemberMutation.mutate(selectedUsers);
   };
 
-  const handleRemoveMember = (userId: number) => {
-    if (!selectedGroup) return;
-    if (window.confirm('Tem certeza que deseja remover este membro do grupo?')) {
-      removeMember({ groupId: selectedGroup.id, userId });
+  const handleToggleUser = (userId: number) => {
+    setSelectedUsers(current => 
+      current.includes(userId)
+        ? current.filter(id => id !== userId)
+        : [...current, userId]
+    );
+  };
+
+  const handleOpenAddMembers = (groupId: number) => {
+    setSelectedGroupId(groupId);
+    setSelectedUsers([]);
+    setAddMemberDialogOpen(true);
+  };
+
+  const handleLeaveGroup = (groupId: number) => {
+    if (window.confirm("Tem certeza que deseja sair deste grupo?")) {
+      leaveGroupMutation.mutate(groupId);
+    }
+  };
+
+  const handleRemoveMember = (groupId: number, userId: number) => {
+    if (window.confirm("Tem certeza que deseja remover este membro?")) {
+      removeMemberMutation.mutate({ groupId, userId });
     }
   };
 
   const handleDeleteGroup = (groupId: number) => {
-    if (window.confirm('Tem certeza que deseja remover este grupo? Esta ação não pode ser desfeita.')) {
-      deleteGroup(groupId);
+    if (window.confirm("Tem certeza que deseja excluir este grupo? Esta ação não pode ser desfeita.")) {
+      deleteGroupMutation.mutate(groupId);
     }
   };
 
-  const handleScheduleWorkout = (groupId: number) => {
-    setLocation(`/schedule-workout/${groupId}`);
+  const navigateToScheduleWorkout = (groupId: number) => {
+    navigate(`/schedule-workout/${groupId}`);
   };
 
-  useEffect(() => {
-    // Reset forms when dialogs close
-    if (!isAddGroupOpen) {
-      form.reset();
-    }
-    if (!isAddMemberOpen) {
-      memberForm.reset();
-    }
-  }, [isAddGroupOpen, isAddMemberOpen, form, memberForm]);
+  const navigateToGroupWorkouts = (groupId: number) => {
+    navigate(`/group-workouts/${groupId}`);
+  };
+
+  const getGroupMembers = (group: Group) => {
+    if (!group.members) return [];
+    
+    // Buscar informações adicionais de cada membro
+    return group.members.map((member: GroupMember) => {
+      const memberUser = allUsers.find((u: User) => u.id === member.userId);
+      return {
+        ...member,
+        user: memberUser
+      };
+    });
+  };
+
+  const isUserInGroup = (groupId: number, userId: number) => {
+    const group = coachGroups.find((g: Group) => g.id === groupId);
+    if (!group || !group.members) return false;
+    return group.members.some((member: GroupMember) => member.userId === userId);
+  };
+
+  const filteredUsers = (groupId: number) => {
+    // Filtrar usuários que ainda não estão no grupo
+    return allUsers.filter((user: User) => !isUserInGroup(groupId, user.id));
+  };
 
   return (
-    <div className="container mx-auto py-6">
-      <div className="flex justify-between items-center mb-6">
-        <h1 className="text-3xl font-bold">Grupos de Treinamento</h1>
+    <div className="container py-6">
+      <div className="flex flex-col md:flex-row justify-between items-start mb-6">
+        <div>
+          <h1 className="text-3xl font-bold">Grupos de Treino</h1>
+          <p className="text-gray-500 dark:text-gray-400">Gerencie seus grupos de treino e acompanhe os atletas</p>
+        </div>
         
-        {isCoach && (
-          <div className="flex space-x-2">
-            {!isCoachView && (
-              <Button variant="outline" onClick={() => setLocation('/groups/coach')}>
-                Ver como Coach
-              </Button>
-            )}
-            {isCoachView && (
-              <Button variant="outline" onClick={() => setLocation('/groups')}>
-                Ver como Atleta
-              </Button>
-            )}
-            <Dialog open={isAddGroupOpen} onOpenChange={setIsAddGroupOpen}>
-              <DialogTrigger asChild>
-                <Button>
-                  <Plus className="mr-2 h-4 w-4" /> Criar Grupo
-                </Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader>
-                  <DialogTitle>Criar Novo Grupo de Treinamento</DialogTitle>
-                  <DialogDescription>
-                    Crie um novo grupo para seus atletas. Depois você poderá adicionar membros e programar treinos.
-                  </DialogDescription>
-                </DialogHeader>
-                
-                <Form {...form}>
-                  <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-                    <FormField
-                      control={form.control}
-                      name="name"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Nome do Grupo</FormLabel>
-                          <FormControl>
-                            <Input placeholder="Ex: CrossFit Iniciantes" {...field} />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    
-                    <FormField
-                      control={form.control}
-                      name="description"
-                      render={({ field }) => (
-                        <FormItem>
-                          <FormLabel>Descrição</FormLabel>
-                          <FormControl>
-                            <Textarea 
-                              placeholder="Descreva o objetivo ou detalhes do grupo" 
-                              {...field} 
-                              value={field.value || ''}
-                            />
-                          </FormControl>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    
-                    <DialogFooter>
-                      <Button type="submit" disabled={isCreating}>
-                        {isCreating ? 'Criando...' : 'Criar Grupo'}
-                      </Button>
-                    </DialogFooter>
-                  </form>
-                </Form>
-              </DialogContent>
-            </Dialog>
-          </div>
+        {user?.role === "coach" && (
+          <Button 
+            className="mt-4 md:mt-0" 
+            onClick={() => setCreateDialogOpen(true)}
+          >
+            <Plus className="h-4 w-4 mr-2" />
+            Novo Grupo
+          </Button>
         )}
       </div>
 
-      {isLoading ? (
-        <div className="flex justify-center items-center p-12">
-          <p>Carregando grupos...</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {groups && groups.length > 0 ? (
-            groups.map((group: Group) => (
-              <Card key={group.id} className="shadow-md">
-                <CardHeader>
-                  <CardTitle className="flex justify-between items-center">
-                    {group.name}
-                    {isCoach && isCoachView && (
-                      <div className="flex space-x-1">
-                        <Button variant="ghost" size="icon" onClick={() => handleScheduleWorkout(group.id)}>
-                          <Calendar className="h-4 w-4" />
-                        </Button>
-                        <Button variant="ghost" size="icon" onClick={() => { /* Implementar edição */ }}>
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                        <Button 
-                          variant="ghost" 
-                          size="icon" 
-                          onClick={() => handleDeleteGroup(group.id)}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    )}
-                  </CardTitle>
-                  <CardDescription>
-                    {group.description || 'Sem descrição'}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <Button 
-                    variant="outline" 
-                    className="w-full"
-                    onClick={() => setSelectedGroup(group)}
-                  >
-                    <Users className="mr-2 h-4 w-4" /> Ver Membros
-                  </Button>
-                </CardContent>
-                <CardFooter className="flex justify-between">
-                  <Button 
-                    variant="outline"
-                    onClick={() => setLocation(`/group-workouts/${group.id}`)}
-                  >
-                    Ver Treinos
-                  </Button>
-                  
-                  {isCoach && isCoachView && (
-                    <Button 
-                      onClick={() => {
-                        setSelectedGroup(group);
-                        setIsAddMemberOpen(true);
-                      }}
-                    >
-                      <UserPlus className="mr-2 h-4 w-4" /> Adicionar Membro
-                    </Button>
-                  )}
-                </CardFooter>
-              </Card>
-            ))
-          ) : (
-            <div className="col-span-full flex flex-col items-center justify-center p-12 text-center">
-              <Users className="h-16 w-16 mb-4 text-gray-400" />
-              <h3 className="text-lg font-semibold">Nenhum grupo encontrado</h3>
-              <p className="text-gray-500 mt-2">
-                {isCoach 
-                  ? 'Você ainda não criou nenhum grupo de treinamento. Clique em "Criar Grupo" para começar.'
-                  : 'Você ainda não participa de nenhum grupo de treinamento.'}
-              </p>
-            </div>
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+        <TabsList className="grid w-full grid-cols-2">
+          {user?.role === "coach" && (
+            <TabsTrigger value="my-groups">
+              <Users className="h-4 w-4 mr-2" />
+              Meus Grupos
+            </TabsTrigger>
           )}
-        </div>
-      )}
+          <TabsTrigger value="joined-groups">
+            <Dumbbell className="h-4 w-4 mr-2" />
+            Grupos que Participo
+          </TabsTrigger>
+        </TabsList>
 
-      {/* Dialog para ver membros do grupo */}
-      <Dialog 
-        open={!!selectedGroup && !isAddMemberOpen} 
-        onOpenChange={(open) => !open && setSelectedGroup(null)}
-      >
-        <DialogContent className="max-w-3xl">
-          <DialogHeader>
-            <DialogTitle>Membros do Grupo: {selectedGroup?.name}</DialogTitle>
-            <DialogDescription>
-              Lista de atletas que fazem parte deste grupo de treinamento.
-            </DialogDescription>
-          </DialogHeader>
-
-          {isMembersLoading ? (
-            <div className="flex justify-center my-8">
-              <p>Carregando membros...</p>
-            </div>
-          ) : members && members.length > 0 ? (
-            <div className="space-y-4 max-h-[60vh] overflow-y-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b">
-                    <th className="py-2 text-left">Nome</th>
-                    <th className="py-2 text-left">Usuário</th>
-                    <th className="py-2 text-left">Email</th>
-                    <th className="py-2 text-left">Data de entrada</th>
-                    {isCoach && isCoachView && <th className="py-2 text-right">Ações</th>}
-                  </tr>
-                </thead>
-                <tbody>
-                  {members.map((member: GroupMember) => (
-                    <tr key={member.id} className="border-b">
-                      <td className="py-3">{member.user.name || '-'}</td>
-                      <td className="py-3">{member.user.username}</td>
-                      <td className="py-3">{member.user.email || '-'}</td>
-                      <td className="py-3">{new Date(member.joinedAt).toLocaleDateString()}</td>
-                      {isCoach && isCoachView && (
-                        <td className="py-3 text-right">
+        {user?.role === "coach" && (
+          <TabsContent value="my-groups">
+            {isLoadingCoachGroups ? (
+              <div className="flex justify-center py-8">
+                <div className="animate-spin h-8 w-8 border-4 border-accent rounded-full border-t-transparent"></div>
+              </div>
+            ) : coachGroups.length === 0 ? (
+              <Alert className="mb-6">
+                <AlertDescription>
+                  Você ainda não criou nenhum grupo. Crie um grupo para começar a adicionar atletas.
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-4">
+                {coachGroups.map((group: Group) => (
+                  <Card key={group.id} className="overflow-hidden">
+                    <CardHeader className="bg-secondary/50 pb-2">
+                      <div className="flex justify-between items-start">
+                        <div>
+                          <CardTitle>{group.name}</CardTitle>
+                          <CardDescription className="mt-1">
+                            {group.members?.length || 0} membros
+                          </CardDescription>
+                        </div>
+                        <div className="flex space-x-1">
                           <Button 
                             variant="ghost" 
                             size="icon"
-                            onClick={() => handleRemoveMember(member.user.id)}
+                            onClick={() => handleDeleteGroup(group.id)}
                           >
-                            <Trash2 className="h-4 w-4" />
+                            <Trash className="h-4 w-4 text-destructive" />
                           </Button>
-                        </td>
+                        </div>
+                      </div>
+                    </CardHeader>
+                    <CardContent className="pt-4">
+                      {group.description && (
+                        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">{group.description}</p>
                       )}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+                      
+                      <div className="flex flex-col space-y-1 mb-4">
+                        <h4 className="text-sm font-semibold flex items-center">
+                          <Users className="h-4 w-4 mr-1" /> 
+                          Membros
+                        </h4>
+                        
+                        {group.members && group.members.length > 0 ? (
+                          <div className="max-h-40 overflow-y-auto">
+                            <Table>
+                              <TableBody>
+                                {getGroupMembers(group).map((member) => (
+                                  <TableRow key={member.id}>
+                                    <TableCell className="py-1">
+                                      {member.user?.name || member.user?.username}
+                                    </TableCell>
+                                    <TableCell className="py-1 text-right">
+                                      <Button
+                                        variant="ghost"
+                                        size="icon"
+                                        onClick={() => handleRemoveMember(group.id, member.userId)}
+                                      >
+                                        <LogOut className="h-3 w-3 text-destructive" />
+                                      </Button>
+                                    </TableCell>
+                                  </TableRow>
+                                ))}
+                              </TableBody>
+                            </Table>
+                          </div>
+                        ) : (
+                          <p className="text-sm text-gray-500">Nenhum membro ainda</p>
+                        )}
+                      </div>
+                    </CardContent>
+                    <CardFooter className="flex justify-between pt-0">
+                      <Button 
+                        variant="outline" 
+                        size="sm"
+                        onClick={() => handleOpenAddMembers(group.id)}
+                      >
+                        <UserPlus className="h-4 w-4 mr-2" />
+                        Adicionar
+                      </Button>
+                      
+                      <div className="flex space-x-2">
+                        <Button 
+                          variant="outline" 
+                          size="sm"
+                          onClick={() => navigateToGroupWorkouts(group.id)}
+                        >
+                          <Calendar className="h-4 w-4 mr-2" />
+                          Treinos
+                        </Button>
+                        
+                        <Button 
+                          variant="default" 
+                          size="sm"
+                          onClick={() => navigateToScheduleWorkout(group.id)}
+                        >
+                          <CalendarPlus className="h-4 w-4 mr-2" />
+                          Agendar
+                        </Button>
+                      </div>
+                    </CardFooter>
+                  </Card>
+                ))}
+              </div>
+            )}
+          </TabsContent>
+        )}
+
+        <TabsContent value="joined-groups">
+          {isLoadingMemberGroups ? (
+            <div className="flex justify-center py-8">
+              <div className="animate-spin h-8 w-8 border-4 border-accent rounded-full border-t-transparent"></div>
             </div>
+          ) : memberGroups.length === 0 ? (
+            <Alert className="mb-6">
+              <AlertDescription>
+                Você ainda não participa de nenhum grupo. Aguarde um coach adicionar você a um grupo.
+              </AlertDescription>
+            </Alert>
           ) : (
-            <div className="flex flex-col items-center justify-center p-8 text-center">
-              <Users className="h-12 w-12 mb-4 text-gray-400" />
-              <h3 className="text-lg font-semibold">Nenhum membro encontrado</h3>
-              <p className="text-gray-500 mt-2">
-                Este grupo ainda não possui membros.
-              </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mt-4">
+              {memberGroups.map((group: Group) => (
+                <Card key={group.id}>
+                  <CardHeader>
+                    <CardTitle>{group.name}</CardTitle>
+                    {group.description && (
+                      <CardDescription>{group.description}</CardDescription>
+                    )}
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm text-gray-600 dark:text-gray-400">
+                      Coach: {group.coachId ? `Coach #${group.coachId}` : "Coach"}
+                    </p>
+                  </CardContent>
+                  <CardFooter className="flex justify-between">
+                    <Button 
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleLeaveGroup(group.id)}
+                    >
+                      <LogOut className="h-4 w-4 mr-2" />
+                      Sair
+                    </Button>
+                    
+                    <Button 
+                      variant="default"
+                      size="sm"
+                      onClick={() => navigateToGroupWorkouts(group.id)}
+                    >
+                      <Calendar className="h-4 w-4 mr-2" />
+                      Ver Treinos
+                    </Button>
+                  </CardFooter>
+                </Card>
+              ))}
             </div>
           )}
+        </TabsContent>
+      </Tabs>
 
-          <DialogFooter>
-            {isCoach && isCoachView && (
-              <Button 
-                onClick={() => {
-                  setIsAddMemberOpen(true);
-                }}
-              >
-                <UserPlus className="mr-2 h-4 w-4" /> Adicionar Membro
-              </Button>
-            )}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Dialog para adicionar membro ao grupo */}
-      <Dialog 
-        open={!!selectedGroup && isAddMemberOpen} 
-        onOpenChange={(open) => {
-          if (!open) {
-            setIsAddMemberOpen(false);
-          }
-        }}
-      >
+      {/* Dialog para criar um novo grupo */}
+      <Dialog open={createDialogOpen} onOpenChange={setCreateDialogOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Adicionar Membro ao Grupo</DialogTitle>
+            <DialogTitle>Criar Novo Grupo</DialogTitle>
             <DialogDescription>
-              Selecione um usuário para adicionar ao grupo "{selectedGroup?.name}".
+              Crie um novo grupo de treino para gerenciar seus atletas.
             </DialogDescription>
           </DialogHeader>
-
-          <form onSubmit={memberForm.handleSubmit(onAddMember)} className="space-y-4">
-            <div className="space-y-2">
-              <label htmlFor="userId" className="text-sm font-medium">
-                Selecione um Usuário
-              </label>
-              <Select 
-                onValueChange={(value) => memberForm.setValue('userId', value)}
-                value={memberForm.watch('userId')}
-              >
-                <SelectTrigger>
-                  <SelectValue placeholder="Selecione um usuário" />
-                </SelectTrigger>
-                <SelectContent>
-                  {users && users
-                    .filter((u: any) => u.role !== 'admin')
-                    .map((user: any) => (
-                      <SelectItem key={user.id} value={user.id.toString()}>
-                        {user.name || user.username} {user.role === 'coach' ? '(Coach)' : ''}
-                      </SelectItem>
-                    ))}
-                </SelectContent>
-              </Select>
+          
+          <form onSubmit={handleSubmit(handleCreateGroup)}>
+            <div className="space-y-4 mt-4">
+              <div className="space-y-2">
+                <Label htmlFor="name">Nome do Grupo</Label>
+                <Input
+                  id="name"
+                  {...register("name")}
+                  placeholder="Digite o nome do grupo"
+                />
+                {errors.name && (
+                  <p className="text-sm text-destructive">{errors.name.message}</p>
+                )}
+              </div>
+              
+              <div className="space-y-2">
+                <Label htmlFor="description">Descrição (opcional)</Label>
+                <Textarea
+                  id="description"
+                  {...register("description")}
+                  placeholder="Digite uma descrição para o grupo"
+                  rows={3}
+                />
+              </div>
             </div>
-
-            <DialogFooter>
-              <Button 
-                type="button" 
-                variant="outline" 
-                onClick={() => setIsAddMemberOpen(false)}
+            
+            <div className="flex justify-end mt-6">
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setCreateDialogOpen(false)}
+                className="mr-2"
               >
                 Cancelar
               </Button>
-              <Button type="submit" disabled={isAddingMember || !memberForm.watch('userId')}>
-                {isAddingMember ? 'Adicionando...' : 'Adicionar'}
+              <Button 
+                type="submit"
+                disabled={createGroupMutation.isPending}
+              >
+                {createGroupMutation.isPending ? (
+                  <>
+                    <div className="animate-spin h-4 w-4 mr-2 border-2 border-white rounded-full border-t-transparent"></div>
+                    Criando...
+                  </>
+                ) : "Criar Grupo"}
               </Button>
-            </DialogFooter>
+            </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Dialog para adicionar membros ao grupo */}
+      <Dialog open={addMemberDialogOpen} onOpenChange={setAddMemberDialogOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle>Adicionar Membros</DialogTitle>
+            <DialogDescription>
+              Selecione os usuários que deseja adicionar ao grupo.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="mt-4">
+            {selectedGroupId && filteredUsers(selectedGroupId).length === 0 ? (
+              <Alert>
+                <AlertDescription>
+                  Não há mais usuários disponíveis para adicionar a este grupo.
+                </AlertDescription>
+              </Alert>
+            ) : (
+              <div className="max-h-[400px] overflow-y-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead className="w-[40px]"></TableHead>
+                      <TableHead>Nome</TableHead>
+                      <TableHead>Usuário</TableHead>
+                      <TableHead>Função</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {selectedGroupId && filteredUsers(selectedGroupId).map((user: User) => (
+                      <TableRow key={user.id}>
+                        <TableCell>
+                          <Checkbox 
+                            checked={selectedUsers.includes(user.id)}
+                            onCheckedChange={() => handleToggleUser(user.id)}
+                          />
+                        </TableCell>
+                        <TableCell>{user.name || '-'}</TableCell>
+                        <TableCell>{user.username}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline">
+                            {user.role === 'athlete' ? 'Atleta' : 
+                             user.role === 'coach' ? 'Coach' : 'Admin'}
+                          </Badge>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+          </div>
+          
+          <div className="flex justify-end mt-6">
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setAddMemberDialogOpen(false)}
+              className="mr-2"
+            >
+              Cancelar
+            </Button>
+            <Button 
+              onClick={handleAddMembers}
+              disabled={addMemberMutation.isPending || selectedUsers.length === 0}
+            >
+              {addMemberMutation.isPending ? (
+                <>
+                  <div className="animate-spin h-4 w-4 mr-2 border-2 border-white rounded-full border-t-transparent"></div>
+                  Adicionando...
+                </>
+              ) : "Adicionar Selecionados"}
+            </Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

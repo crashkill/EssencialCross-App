@@ -13,7 +13,12 @@ const MockAuthContext = createContext<any>(undefined);
 
 export const MockAuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [authState, setAuthState] = useState<AuthState>({
-    user: { id: 1, username: "demo", createdAt: new Date().toISOString() },
+    user: { 
+      id: 1, 
+      username: "demo", 
+      createdAt: new Date().toISOString(),
+      role: "coach" // Adicionando role para que os componentes de grupos funcionem
+    },
     isAuthenticated: true,
     isLoading: false,
   });

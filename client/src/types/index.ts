@@ -5,6 +5,7 @@ export interface AuthUser {
   name?: string;
   email?: string;
   createdAt: string;
+  role?: 'athlete' | 'coach' | 'admin';
 }
 
 export interface LoginCredentials {
@@ -93,4 +94,4 @@ export interface TimerSettings {
 }
 
 // Tab Navigation
-export type TabName = 'dashboard' | 'workout' | 'prs' | 'timer' | 'exercises' | 'wod-generator';
+export type TabName = 'dashboard' | 'workout' | 'prs' | 'timer' | 'exercises' | 'wod-generator' | 'groups';

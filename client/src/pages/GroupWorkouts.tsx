@@ -1,61 +1,29 @@
-import { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useParams, useLocation } from 'wouter';
-import { useAuth } from '../context/AuthContext';
-import { apiRequest } from '../lib/queryClient';
-import { Calendar, ArrowLeft, Clock, CheckCircle, X, Trash2, ClipboardList } from 'lucide-react';
-
-// UI Components
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import React, { useState } from "react";
+import { useParams, useLocation } from "wouter";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useForm } from "react-hook-form";
+import { z } from "zod";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { format, parseISO, isAfter, isBefore, isToday } from "date-fns";
+import { ptBR } from "date-fns/locale";
+import { useAuth } from "@/context/AuthContext";
+import { useToast } from "@/hooks/use-toast";
+import { queryClient, apiRequest } from "@/lib/queryClient";
 import { Button } from "@/components/ui/button";
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import {
-  Form,
-  FormControl,
-  FormField,
-  FormItem,
-  FormLabel,
-  FormMessage,
-} from "@/components/ui/form";
-import {
-  Tabs,
-  TabsContent,
-  TabsList,
-  TabsTrigger,
-} from "@/components/ui/tabs";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
+import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { useToast } from '@/hooks/use-toast';
-import { useForm } from 'react-hook-form';
-import { zodResolver } from '@hookform/resolvers/zod';
-import { z } from 'zod';
+import { ArrowLeft, Calendar, Award, Clock, Timer, ClipboardCheck } from "lucide-react";
 
 const resultFormSchema = z.object({
-  result: z.string().min(1, { message: 'Digite o resultado do treino' }),
+  result: z.string().min(1, {
+    message: "O resultado é obrigatório",
+  }),
   notes: z.string().optional(),
 });
 
@@ -95,375 +63,363 @@ interface WorkoutResult {
   };
 }
 
-const GroupWorkouts = () => {
-  const params = useParams<{ groupId: string }>();
-  const groupId = parseInt(params.groupId);
+const GroupWorkouts: React.FC = () => {
+  const { groupId } = useParams<{ groupId: string }>();
+  const [_, navigate] = useLocation();
   const { user } = useAuth();
   const { toast } = useToast();
-  const queryClient = useQueryClient();
-  const [, setLocation] = useLocation();
-  const [activeTab, setActiveTab] = useState('upcoming');
+  // Use o queryClient importado, não declare novamente
+  // const queryClient = useQueryClient();
   const [selectedWorkout, setSelectedWorkout] = useState<ScheduledWorkout | null>(null);
-  const [isWorkoutResultDialogOpen, setIsWorkoutResultDialogOpen] = useState(false);
-  const [isResultsViewDialogOpen, setIsResultsViewDialogOpen] = useState(false);
-  
-  const isCoach = user?.role === 'coach' || user?.role === 'admin';
-  
-  // Formulário para registrar resultado
+  const [showResultForm, setShowResultForm] = useState(false);
+  const [activeTab, setActiveTab] = useState<string>("upcoming");
+
+  // Form
   const form = useForm<ResultFormData>({
     resolver: zodResolver(resultFormSchema),
     defaultValues: {
-      result: '',
-      notes: '',
-    },
+      result: "",
+      notes: ""
+    }
   });
 
-  // Buscar informações do grupo
-  const { data: group, isLoading: isGroupLoading } = useQuery({
+  // Queries
+  const { data: group, isLoading: isLoadingGroup } = useQuery({
     queryKey: ['/api/groups', groupId],
-    enabled: !!groupId && !!user,
+    queryFn: async () => {
+      const response = await fetch(`/api/groups/${groupId}`);
+      if (!response.ok) throw new Error('Falha ao carregar o grupo');
+      return response.json();
+    }
   });
 
-  // Buscar workouts agendados para o grupo
-  const { data: scheduledWorkouts, isLoading: isWorkoutsLoading } = useQuery({
+  const { data: scheduledWorkouts = [], isLoading: isLoadingWorkouts } = useQuery({
     queryKey: ['/api/scheduled-workouts/group', groupId],
-    enabled: !!groupId && !!user,
+    queryFn: async () => {
+      const response = await fetch(`/api/scheduled-workouts/group/${groupId}`);
+      if (!response.ok) throw new Error('Falha ao carregar treinos agendados');
+      return response.json();
+    }
   });
 
-  // Buscar resultados para o workout selecionado
-  const { data: workoutResults, isLoading: isResultsLoading } = useQuery({
+  const { data: workoutResults = [], isLoading: isLoadingResults } = useQuery({
     queryKey: ['/api/workout-results/scheduled', selectedWorkout?.id],
-    enabled: !!selectedWorkout && isResultsViewDialogOpen,
+    queryFn: async () => {
+      if (!selectedWorkout) return [];
+      const response = await fetch(`/api/workout-results/scheduled/${selectedWorkout.id}`);
+      if (!response.ok) throw new Error('Falha ao carregar resultados');
+      return response.json();
+    },
+    enabled: !!selectedWorkout
   });
 
-  // Registrar resultado de treino
-  const { mutate: submitResult, isPending: isSubmittingResult } = useMutation({
+  // Mutations
+  const addResultMutation = useMutation({
     mutationFn: async (data: ResultFormData) => {
-      if (!selectedWorkout) return null;
+      if (!selectedWorkout) throw new Error('Nenhum treino selecionado');
       
-      return apiRequest('/api/workout-results', {
-        method: 'POST',
-        body: JSON.stringify({
-          scheduledWorkoutId: selectedWorkout.id,
-          result: data.result,
-          notes: data.notes || null,
-        }),
+      return apiRequest('/api/workout-results', 'POST', {
+        scheduledWorkoutId: selectedWorkout.id,
+        result: data.result,
+        notes: data.notes || null
       });
     },
     onSuccess: () => {
-      toast({
-        title: 'Resultado registrado com sucesso',
-        description: 'Seu resultado foi registrado com sucesso.',
-      });
-      queryClient.invalidateQueries({ queryKey: ['/api/workout-results/user'] });
       queryClient.invalidateQueries({ queryKey: ['/api/workout-results/scheduled', selectedWorkout?.id] });
+      toast({
+        title: "Resultado registrado",
+        description: "Seu resultado foi registrado com sucesso!"
+      });
+      setShowResultForm(false);
       form.reset();
-      setIsWorkoutResultDialogOpen(false);
     },
     onError: (error) => {
       toast({
-        title: 'Erro ao registrar resultado',
-        description: 'Ocorreu um erro ao registrar seu resultado. Tente novamente.',
-        variant: 'destructive',
+        title: "Erro",
+        description: error.message,
+        variant: "destructive"
       });
-    },
+    }
   });
 
-  // Remover workout agendado
-  const { mutate: deleteScheduledWorkout } = useMutation({
+  const deleteScheduledWorkoutMutation = useMutation({
     mutationFn: async (id: number) => {
-      return apiRequest(`/api/scheduled-workouts/${id}`, {
-        method: 'DELETE',
-      });
+      return apiRequest(`/api/scheduled-workouts/${id}`, 'DELETE');
     },
     onSuccess: () => {
-      toast({
-        title: 'Treino removido com sucesso',
-        description: 'O treino agendado foi removido com sucesso.',
-      });
       queryClient.invalidateQueries({ queryKey: ['/api/scheduled-workouts/group', groupId] });
+      toast({
+        title: "Treino removido",
+        description: "O treino agendado foi removido com sucesso!"
+      });
+      setSelectedWorkout(null);
     },
     onError: (error) => {
       toast({
-        title: 'Erro ao remover treino',
-        description: 'Ocorreu um erro ao remover o treino agendado. Tente novamente.',
-        variant: 'destructive',
+        title: "Erro",
+        description: error.message,
+        variant: "destructive"
       });
-    },
+    }
   });
 
+  // Handlers
   const onSubmitResult = (data: ResultFormData) => {
-    submitResult(data);
+    addResultMutation.mutate(data);
+  };
+
+  const handleShowResultForm = (workout: ScheduledWorkout) => {
+    setSelectedWorkout(workout);
+    setShowResultForm(true);
+    form.reset();
+  };
+
+  const handleViewResults = (workout: ScheduledWorkout) => {
+    setSelectedWorkout(workout);
   };
 
   const handleDeleteWorkout = (id: number) => {
-    if (window.confirm('Tem certeza que deseja remover este treino agendado? Esta ação não pode ser desfeita.')) {
-      deleteScheduledWorkout(id);
+    if (window.confirm("Tem certeza que deseja excluir este treino agendado? Esta ação não pode ser desfeita.")) {
+      deleteScheduledWorkoutMutation.mutate(id);
     }
   };
 
-  const handleBack = () => {
-    setLocation('/groups');
-  };
-
-  // Filtrar workouts por data (futuros ou passados)
-  const getFilteredWorkouts = () => {
-    if (!scheduledWorkouts) return [];
-    
-    const now = new Date();
-    
+  // Filtros para treinos agendados
+  const getUpcomingWorkouts = () => {
     return scheduledWorkouts.filter((workout: ScheduledWorkout) => {
-      const workoutDate = new Date(workout.scheduledDate);
-      if (activeTab === 'upcoming') {
-        return workoutDate >= now;
-      } else {
-        return workoutDate < now;
-      }
+      const date = parseISO(workout.scheduledDate);
+      return isAfter(date, new Date()) || isToday(date);
     }).sort((a: ScheduledWorkout, b: ScheduledWorkout) => {
-      if (activeTab === 'upcoming') {
-        // Próximos treinos em ordem crescente de data
-        return new Date(a.scheduledDate).getTime() - new Date(b.scheduledDate).getTime();
-      } else {
-        // Treinos passados em ordem decrescente de data
-        return new Date(b.scheduledDate).getTime() - new Date(a.scheduledDate).getTime();
-      }
+      return new Date(a.scheduledDate).getTime() - new Date(b.scheduledDate).getTime();
     });
   };
 
-  // Formatar data e hora para exibição
-  const formatDateTime = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleString('pt-BR', {
-      day: '2-digit',
-      month: '2-digit',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
+  const getPastWorkouts = () => {
+    return scheduledWorkouts.filter((workout: ScheduledWorkout) => {
+      const date = parseISO(workout.scheduledDate);
+      return isBefore(date, new Date()) && !isToday(date);
+    }).sort((a: ScheduledWorkout, b: ScheduledWorkout) => {
+      return new Date(b.scheduledDate).getTime() - new Date(a.scheduledDate).getTime();
     });
   };
 
-  // Verificar se um treino já tem resultado do usuário atual
-  const hasUserResult = (workoutId: number) => {
-    if (!workoutResults) return false;
+  const hasUserCompletedWorkout = (scheduledWorkoutId: number) => {
     return workoutResults.some((result: WorkoutResult) => 
-      result.scheduledWorkoutId === workoutId && result.userId === user?.id
+      result.scheduledWorkoutId === scheduledWorkoutId && result.userId === user?.id
     );
   };
 
-  if (isGroupLoading) {
+  const isCoachOrAdmin = () => {
+    if (!group) return false;
+    return group.coachId === user?.id || user?.role === 'admin';
+  };
+
+  if (isLoadingGroup) {
     return (
-      <div className="container mx-auto py-6">
-        <div className="flex justify-center items-center p-12">
-          <p>Carregando informações do grupo...</p>
-        </div>
+      <div className="container py-10 flex justify-center">
+        <div className="animate-spin h-8 w-8 border-4 border-accent rounded-full border-t-transparent"></div>
       </div>
     );
   }
 
-  if (!group) {
-    return (
-      <div className="container mx-auto py-6">
-        <div className="flex flex-col items-center justify-center p-12 text-center">
-          <h3 className="text-lg font-semibold">Grupo não encontrado</h3>
-          <p className="text-gray-500 mt-2">
-            Não foi possível encontrar o grupo solicitado.
-          </p>
-          <Button onClick={handleBack} className="mt-4">
-            <ArrowLeft className="mr-2 h-4 w-4" /> Voltar para Grupos
-          </Button>
-        </div>
-      </div>
-    );
-  }
-
-  const filteredWorkouts = getFilteredWorkouts();
+  const upcomingWorkouts = getUpcomingWorkouts();
+  const pastWorkouts = getPastWorkouts();
 
   return (
-    <div className="container mx-auto py-6">
+    <div className="container py-6">
       <div className="flex items-center mb-6">
-        <Button variant="ghost" onClick={handleBack} className="mr-4">
-          <ArrowLeft className="h-4 w-4" />
+        <Button 
+          variant="ghost" 
+          onClick={() => navigate("/groups")}
+          className="mr-2"
+        >
+          <ArrowLeft className="h-4 w-4 mr-1" />
         </Button>
         <div>
-          <h1 className="text-3xl font-bold">Treinos do Grupo</h1>
-          <p className="text-gray-500">Grupo: {group.name}</p>
+          <h1 className="text-2xl font-bold">Treinos em Grupo</h1>
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            {group?.name} - Treinos agendados
+          </p>
         </div>
       </div>
 
-      <Tabs defaultValue="upcoming" value={activeTab} onValueChange={setActiveTab}>
-        <div className="flex justify-between items-center mb-4">
-          <TabsList>
-            <TabsTrigger value="upcoming">Próximos Treinos</TabsTrigger>
-            <TabsTrigger value="past">Treinos Anteriores</TabsTrigger>
-          </TabsList>
-          
-          {isCoach && group.coachId === user?.id && (
-            <Button onClick={() => setLocation(`/schedule-workout/${groupId}`)}>
-              <Calendar className="mr-2 h-4 w-4" /> Agendar Novo Treino
-            </Button>
-          )}
-        </div>
-        
-        <TabsContent value="upcoming" className="space-y-4">
-          {isWorkoutsLoading ? (
-            <div className="flex justify-center items-center p-12">
-              <p>Carregando treinos...</p>
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+        <TabsList className="grid w-full grid-cols-2">
+          <TabsTrigger value="upcoming">
+            <Calendar className="h-4 w-4 mr-2" />
+            Próximos Treinos
+          </TabsTrigger>
+          <TabsTrigger value="past">
+            <Clock className="h-4 w-4 mr-2" />
+            Treinos Passados
+          </TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="upcoming">
+          {isLoadingWorkouts ? (
+            <div className="flex justify-center py-8">
+              <div className="animate-spin h-8 w-8 border-4 border-accent rounded-full border-t-transparent"></div>
             </div>
-          ) : filteredWorkouts.length > 0 ? (
-            filteredWorkouts.map((workout: ScheduledWorkout) => (
-              <Card key={workout.id} className="shadow-sm">
-                <CardHeader>
-                  <CardTitle className="flex justify-between items-center">
-                    <div className="flex items-center">
-                      <Badge className="mr-2">{workout.workout.type}</Badge>
-                      {workout.workout.description.slice(0, 60)}
-                      {workout.workout.description.length > 60 ? '...' : ''}
+          ) : upcomingWorkouts.length === 0 ? (
+            <Card>
+              <CardContent className="pt-6 text-center">
+                <p className="text-muted-foreground">Não há treinos agendados para os próximos dias.</p>
+                {isCoachOrAdmin() && (
+                  <Button 
+                    className="mt-4" 
+                    onClick={() => navigate(`/schedule-workout/${groupId}`)}
+                  >
+                    Agendar Treino
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
+              {upcomingWorkouts.map((workout: ScheduledWorkout) => (
+                <Card key={workout.id} className="overflow-hidden">
+                  <CardHeader className="bg-secondary/50 pb-2">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <Badge variant="outline" className="mb-2">
+                          {workout.workout.type}
+                        </Badge>
+                        <CardTitle className="text-lg">
+                          {format(parseISO(workout.scheduledDate), "EEEE, dd 'de' MMMM", { locale: ptBR })}
+                        </CardTitle>
+                        <CardDescription>
+                          {isToday(parseISO(workout.scheduledDate)) ? "Hoje" : ""}
+                        </CardDescription>
+                      </div>
+                      {isCoachOrAdmin() && (
+                        <Button 
+                          variant="destructive" 
+                          size="sm"
+                          onClick={() => handleDeleteWorkout(workout.id)}
+                        >
+                          Cancelar
+                        </Button>
+                      )}
                     </div>
-                    {isCoach && group.coachId === user?.id && (
+                  </CardHeader>
+                  <CardContent className="pt-4">
+                    <div className="whitespace-pre-wrap mb-4">
+                      {workout.workout.description}
+                    </div>
+                  </CardContent>
+                  <CardFooter className="flex justify-between">
+                    <Button 
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleViewResults(workout)}
+                    >
+                      <Award className="h-4 w-4 mr-2" />
+                      Resultados
+                    </Button>
+                    
+                    {hasUserCompletedWorkout(workout.id) ? (
+                      <Badge variant="outline" className="px-3 py-1">
+                        <ClipboardCheck className="h-4 w-4 mr-2" />
+                        Concluído
+                      </Badge>
+                    ) : (
                       <Button 
-                        variant="ghost" 
-                        size="icon"
-                        onClick={() => handleDeleteWorkout(workout.id)}
+                        variant="default"
+                        size="sm"
+                        onClick={() => handleShowResultForm(workout)}
                       >
-                        <Trash2 className="h-4 w-4" />
+                        <Timer className="h-4 w-4 mr-2" />
+                        Registrar Resultado
                       </Button>
                     )}
-                  </CardTitle>
-                  <CardDescription className="flex items-center">
-                    <Clock className="mr-2 h-4 w-4" /> {formatDateTime(workout.scheduledDate)}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="whitespace-pre-line">
-                    {workout.workout.description}
-                  </div>
-                </CardContent>
-                <CardFooter className="flex justify-between">
-                  <Button 
-                    variant="outline"
-                    onClick={() => {
-                      setSelectedWorkout(workout);
-                      setIsResultsViewDialogOpen(true);
-                    }}
-                  >
-                    <ClipboardList className="mr-2 h-4 w-4" /> Ver Resultados
-                  </Button>
-                  
-                  <Button 
-                    onClick={() => {
-                      setSelectedWorkout(workout);
-                      setIsWorkoutResultDialogOpen(true);
-                    }}
-                    disabled={hasUserResult(workout.id)}
-                  >
-                    {hasUserResult(workout.id) ? (
-                      <>
-                        <CheckCircle className="mr-2 h-4 w-4" /> Resultado Registrado
-                      </>
-                    ) : (
-                      <>
-                        <CheckCircle className="mr-2 h-4 w-4" /> Registrar Resultado
-                      </>
-                    )}
-                  </Button>
-                </CardFooter>
-              </Card>
-            ))
-          ) : (
-            <div className="flex flex-col items-center justify-center p-12 text-center">
-              <Calendar className="h-16 w-16 mb-4 text-gray-400" />
-              <h3 className="text-lg font-semibold">Nenhum treino agendado</h3>
-              <p className="text-gray-500 mt-2">
-                Não há treinos agendados para este grupo.
-                {isCoach && group.coachId === user?.id && ' Clique em "Agendar Novo Treino" para criar um.'}
-              </p>
+                  </CardFooter>
+                </Card>
+              ))}
             </div>
           )}
         </TabsContent>
-        
-        <TabsContent value="past" className="space-y-4">
-          {isWorkoutsLoading ? (
-            <div className="flex justify-center items-center p-12">
-              <p>Carregando treinos...</p>
+
+        <TabsContent value="past">
+          {isLoadingWorkouts ? (
+            <div className="flex justify-center py-8">
+              <div className="animate-spin h-8 w-8 border-4 border-accent rounded-full border-t-transparent"></div>
             </div>
-          ) : filteredWorkouts.length > 0 ? (
-            filteredWorkouts.map((workout: ScheduledWorkout) => (
-              <Card key={workout.id} className="shadow-sm">
-                <CardHeader>
-                  <CardTitle className="flex items-center">
-                    <Badge className="mr-2">{workout.workout.type}</Badge>
-                    {workout.workout.description.slice(0, 60)}
-                    {workout.workout.description.length > 60 ? '...' : ''}
-                  </CardTitle>
-                  <CardDescription className="flex items-center">
-                    <Clock className="mr-2 h-4 w-4" /> {formatDateTime(workout.scheduledDate)}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent>
-                  <div className="whitespace-pre-line">
-                    {workout.workout.description}
-                  </div>
-                </CardContent>
-                <CardFooter className="flex justify-between">
-                  <Button 
-                    variant="outline"
-                    onClick={() => {
-                      setSelectedWorkout(workout);
-                      setIsResultsViewDialogOpen(true);
-                    }}
-                  >
-                    <ClipboardList className="mr-2 h-4 w-4" /> Ver Resultados
-                  </Button>
-                  
-                  {!hasUserResult(workout.id) && (
-                    <Button 
-                      onClick={() => {
-                        setSelectedWorkout(workout);
-                        setIsWorkoutResultDialogOpen(true);
-                      }}
-                    >
-                      <CheckCircle className="mr-2 h-4 w-4" /> Registrar Resultado
-                    </Button>
-                  )}
-                </CardFooter>
-              </Card>
-            ))
+          ) : pastWorkouts.length === 0 ? (
+            <Card>
+              <CardContent className="pt-6 text-center">
+                <p className="text-muted-foreground">Não há registros de treinos anteriores.</p>
+              </CardContent>
+            </Card>
           ) : (
-            <div className="flex flex-col items-center justify-center p-12 text-center">
-              <Calendar className="h-16 w-16 mb-4 text-gray-400" />
-              <h3 className="text-lg font-semibold">Nenhum treino anterior</h3>
-              <p className="text-gray-500 mt-2">
-                Não há registros de treinos anteriores para este grupo.
-              </p>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mt-4">
+              {pastWorkouts.map((workout: ScheduledWorkout) => (
+                <Card key={workout.id} className="overflow-hidden">
+                  <CardHeader className="bg-secondary/50 pb-2">
+                    <div className="flex justify-between items-start">
+                      <div>
+                        <Badge variant="outline" className="mb-2">
+                          {workout.workout.type}
+                        </Badge>
+                        <CardTitle className="text-lg">
+                          {format(parseISO(workout.scheduledDate), "EEEE, dd 'de' MMMM", { locale: ptBR })}
+                        </CardTitle>
+                      </div>
+                    </div>
+                  </CardHeader>
+                  <CardContent className="pt-4">
+                    <div className="whitespace-pre-wrap mb-4">
+                      {workout.workout.description}
+                    </div>
+                  </CardContent>
+                  <CardFooter className="flex justify-between">
+                    <Button 
+                      variant="outline"
+                      size="sm"
+                      onClick={() => handleViewResults(workout)}
+                    >
+                      <Award className="h-4 w-4 mr-2" />
+                      Resultados
+                    </Button>
+                    
+                    {!hasUserCompletedWorkout(workout.id) && (
+                      <Button 
+                        variant="default"
+                        size="sm"
+                        onClick={() => handleShowResultForm(workout)}
+                      >
+                        <Timer className="h-4 w-4 mr-2" />
+                        Registrar Resultado
+                      </Button>
+                    )}
+                  </CardFooter>
+                </Card>
+              ))}
             </div>
           )}
         </TabsContent>
       </Tabs>
 
       {/* Dialog para registrar resultado */}
-      <Dialog
-        open={isWorkoutResultDialogOpen}
-        onOpenChange={setIsWorkoutResultDialogOpen}
-      >
+      <Dialog open={showResultForm} onOpenChange={setShowResultForm}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Registrar Resultado</DialogTitle>
             <DialogDescription>
-              Registre seu resultado para o treino {selectedWorkout?.workout.type}.
+              Informe seu resultado para o treino do dia {selectedWorkout && format(parseISO(selectedWorkout.scheduledDate), "dd/MM/yyyy")}
             </DialogDescription>
           </DialogHeader>
           
           <Form {...form}>
-            <form onSubmit={form.handleSubmit(onSubmitResult)} className="space-y-4">
+            <form onSubmit={form.handleSubmit(onSubmitResult)} className="space-y-6">
               <FormField
                 control={form.control}
                 name="result"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Resultado</FormLabel>
+                    <FormLabel>Resultado *</FormLabel>
                     <FormControl>
-                      <Input
-                        placeholder="Ex: 10 rounds + 15 reps ou 120kg"
+                      <Input 
+                        placeholder="Ex: 12 rounds + 10 reps, 5:32 minutos, 100kg..."
                         {...field}
                       />
                     </FormControl>
@@ -477,12 +433,12 @@ const GroupWorkouts = () => {
                 name="notes"
                 render={({ field }) => (
                   <FormItem>
-                    <FormLabel>Observações (opcional)</FormLabel>
+                    <FormLabel>Observações</FormLabel>
                     <FormControl>
-                      <Textarea
-                        placeholder="Observações sobre sua performance, dificuldades, etc."
+                      <Textarea 
+                        placeholder="Observações sobre o treino (opcional)"
                         {...field}
-                        value={field.value || ''}
+                        rows={3}
                       />
                     </FormControl>
                     <FormMessage />
@@ -490,18 +446,27 @@ const GroupWorkouts = () => {
                 )}
               />
               
-              <DialogFooter>
+              <div className="flex justify-end pt-4">
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={() => setIsWorkoutResultDialogOpen(false)}
+                  onClick={() => setShowResultForm(false)}
+                  className="mr-2"
                 >
                   Cancelar
                 </Button>
-                <Button type="submit" disabled={isSubmittingResult}>
-                  {isSubmittingResult ? 'Salvando...' : 'Salvar Resultado'}
+                <Button 
+                  type="submit"
+                  disabled={addResultMutation.isPending}
+                >
+                  {addResultMutation.isPending ? (
+                    <>
+                      <div className="animate-spin h-4 w-4 mr-2 border-2 border-white rounded-full border-t-transparent"></div>
+                      Registrando...
+                    </>
+                  ) : "Registrar Resultado"}
                 </Button>
-              </DialogFooter>
+              </div>
             </form>
           </Form>
         </DialogContent>
@@ -509,57 +474,67 @@ const GroupWorkouts = () => {
 
       {/* Dialog para visualizar resultados */}
       <Dialog
-        open={isResultsViewDialogOpen}
-        onOpenChange={setIsResultsViewDialogOpen}
+        open={!!selectedWorkout && !showResultForm}
+        onOpenChange={(open) => !open && setSelectedWorkout(null)}
       >
         <DialogContent className="max-w-3xl">
           <DialogHeader>
             <DialogTitle>Resultados do Treino</DialogTitle>
             <DialogDescription>
-              {selectedWorkout?.workout.type}: {selectedWorkout?.workout.description.slice(0, 50)}
-              {selectedWorkout?.workout.description && selectedWorkout?.workout.description.length > 50 ? '...' : ''} 
-              - {selectedWorkout && formatDateTime(selectedWorkout.scheduledDate)}
+              {selectedWorkout && (
+                <div className="mt-2">
+                  <p>
+                    {format(parseISO(selectedWorkout.scheduledDate), "dd 'de' MMMM 'de' yyyy", { locale: ptBR })}
+                  </p>
+                  <Badge variant="outline" className="mt-1">
+                    {selectedWorkout.workout.type}
+                  </Badge>
+                  <p className="mt-2 font-medium">Descrição:</p>
+                  <p className="whitespace-pre-wrap text-sm">
+                    {selectedWorkout.workout.description}
+                  </p>
+                </div>
+              )}
             </DialogDescription>
           </DialogHeader>
           
-          {isResultsLoading ? (
-            <div className="flex justify-center items-center p-6">
-              <p>Carregando resultados...</p>
-            </div>
-          ) : workoutResults && workoutResults.length > 0 ? (
-            <div className="max-h-[60vh] overflow-y-auto">
+          <div className="mt-4">
+            {isLoadingResults ? (
+              <div className="flex justify-center py-4">
+                <div className="animate-spin h-6 w-6 border-2 border-accent rounded-full border-t-transparent"></div>
+              </div>
+            ) : workoutResults.length === 0 ? (
+              <p className="text-center text-gray-500 py-4">
+                Ainda não há resultados registrados para este treino.
+              </p>
+            ) : (
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Atleta</TableHead>
                     <TableHead>Resultado</TableHead>
                     <TableHead>Observações</TableHead>
-                    <TableHead>Data/Hora</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {workoutResults.map((result: WorkoutResult) => (
                     <TableRow key={result.id}>
-                      <TableCell className="font-medium">
+                      <TableCell>
                         {result.user.name || result.user.username}
+                        {result.userId === user?.id && (
+                          <Badge variant="outline" className="ml-2 text-xs">
+                            Você
+                          </Badge>
+                        )}
                       </TableCell>
-                      <TableCell>{result.result}</TableCell>
-                      <TableCell>{result.notes || '-'}</TableCell>
-                      <TableCell>{formatDateTime(result.completedAt)}</TableCell>
+                      <TableCell className="font-medium">{result.result}</TableCell>
+                      <TableCell>{result.notes || "-"}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
               </Table>
-            </div>
-          ) : (
-            <div className="flex flex-col items-center justify-center p-8 text-center">
-              <ClipboardList className="h-12 w-12 mb-4 text-gray-400" />
-              <h3 className="text-lg font-semibold">Nenhum resultado registrado</h3>
-              <p className="text-gray-500 mt-2">
-                Ainda não há resultados registrados para este treino.
-              </p>
-            </div>
-          )}
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </div>
