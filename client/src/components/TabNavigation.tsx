@@ -54,6 +54,11 @@ const TabNavigation: React.FC<TabNavigationProps> = () => {
       return;
     }
     
+    if (tab === 'wod-generator') {
+      setLocation('/wod-generator');
+      return;
+    }
+    
     setActiveTab(tab);
   };
 

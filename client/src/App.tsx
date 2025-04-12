@@ -33,12 +33,13 @@ const App: React.FC = () => {
 
   return (
     <div className="app-container min-h-screen flex flex-col">
-      {(isAuthenticated || location === "/login" || location === "/register" || location === "/wod-demo") && <Header />}
+      {(isAuthenticated || location === "/login" || location === "/register" || location === "/wod-demo" || location === "/wod-generator") && <Header />}
       
       <Switch>
         <Route path="/login" component={Login} />
         <Route path="/register" component={Register} />
         <Route path="/wod-demo" component={WodGeneratorDemo} />
+        <Route path="/wod-generator" component={WodGeneratorDemo} />
         
         <Route path="/">
           <AuthGuard>
